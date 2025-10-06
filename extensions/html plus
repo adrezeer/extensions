@@ -1,0 +1,656 @@
+(function (Scratch) {
+  'use strict';
+
+  if (!Scratch.extensions.unsandboxed) {
+    throw new Error('يجب تشغيل الإضافة داخل TurboWarp وليس Scratch العادي.');
+  }
+
+  const htmlElements = [];
+  const eventCallbacks = {};
+  let globalZIndex = 1000;
+
+  const getStage = () => {
+    const frame = document.querySelector('iframe');
+    return frame ? frame.contentDocument.body : document.body;
+  };
+
+  const keepInBounds = (el) => {
+    const stage = getStage();
+    const stageRect = stage.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    
+    let x = parseInt(el.style.left) || 0;
+    let y = parseInt(el.style.top) || 0;
+    
+    const maxX = stageRect.width - elRect.width;
+    const maxY = stageRect.height - elRect.height;
+    
+    x = Math.max(0, Math.min(x, maxX));
+    y = Math.max(0, Math.min(y, maxY));
+    
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+  };
+
+  const updateElementMenu = () => {
+    return htmlElements
+      .map((el, i) => el ? ({
+        text: `${el.dataset.label || el.tagName.toLowerCase()} (${i + 1})`,
+        value: String(i + 1)
+      }) : null)
+      .filter(item => item !== null);
+  };
+
+  const ext = {
+    getInfo() {
+      return {
+        id: 'htmlCreatorSmart',
+        name: 'HTML+ عناصر',
+        color1: '#10b981',
+        color2: '#059669',
+        color3: '#064e3b',
+        blocks: [
+          // إنشاء العناصر
+          {
+            opcode: 'addElement',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '➕ أضف [TYPE] بالنص [TEXT]',
+            arguments: {
+              TYPE: { type: Scratch.ArgumentType.STRING, menu: 'elementMenu' },
+              TEXT: { type: Scratch.ArgumentType.STRING, defaultValue: 'نص الزر' }
+            }
+          },
+          {
+            opcode: 'addElementWithId',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '➕ أضف [TYPE] بالنص [TEXT] ومعرّف [ID]',
+            arguments: {
+              TYPE: { type: Scratch.ArgumentType.STRING, menu: 'elementMenu' },
+              TEXT: { type: Scratch.ArgumentType.STRING, defaultValue: 'نص' },
+              ID: { type: Scratch.ArgumentType.STRING, defaultValue: 'عنصري' }
+            }
+          },
+          
+          '---',
+          
+          // التحكم بالموقع والحجم
+          {
+            opcode: 'moveElement',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '📦 حرّك [ELEMENT] إلى X:[X] Y:[Y]',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' },
+              X: { type: Scratch.ArgumentType.NUMBER, defaultValue: 100 },
+              Y: { type: Scratch.ArgumentType.NUMBER, defaultValue: 100 }
+            }
+          },
+          {
+            opcode: 'setSize',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '📏 عيّن حجم [ELEMENT] العرض:[WIDTH] الطول:[HEIGHT]',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' },
+              WIDTH: { type: Scratch.ArgumentType.NUMBER, defaultValue: 150 },
+              HEIGHT: { type: Scratch.ArgumentType.NUMBER, defaultValue: 40 }
+            }
+          },
+          {
+            opcode: 'setRotation',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '🔄 دوّر [ELEMENT] بزاوية [ANGLE] درجة',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' },
+              ANGLE: { type: Scratch.ArgumentType.NUMBER, defaultValue: 45 }
+            }
+          },
+          
+          '---',
+          
+          // التصميم
+          {
+            opcode: 'setStyle',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '🎨 عيّن [STYLE] لـ [ELEMENT] إلى [VALUE]',
+            arguments: {
+              STYLE: { type: Scratch.ArgumentType.STRING, menu: 'styleMenu' },
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' },
+              VALUE: { type: Scratch.ArgumentType.STRING, defaultValue: '#10b981' }
+            }
+          },
+          {
+            opcode: 'setOpacity',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '👻 عيّن شفافية [ELEMENT] إلى [OPACITY]%',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' },
+              OPACITY: { type: Scratch.ArgumentType.NUMBER, defaultValue: 100 }
+            }
+          },
+          {
+            opcode: 'setZIndex',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '📚 عيّن طبقة [ELEMENT] إلى [Z]',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' },
+              Z: { type: Scratch.ArgumentType.NUMBER, defaultValue: 1000 }
+            }
+          },
+          
+          '---',
+          
+          // النصوص والمحتوى
+          {
+            opcode: 'changeText',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '✏️ غيّر نص [ELEMENT] إلى [TEXT]',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' },
+              TEXT: { type: Scratch.ArgumentType.STRING, defaultValue: 'نص جديد' }
+            }
+          },
+          {
+            opcode: 'appendText',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '➕ أضف نص [TEXT] إلى [ELEMENT]',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' },
+              TEXT: { type: Scratch.ArgumentType.STRING, defaultValue: ' نص إضافي' }
+            }
+          },
+          
+          '---',
+          
+          // التفاعل والأحداث
+          {
+            opcode: 'onClick',
+            blockType: Scratch.BlockType.HAT,
+            text: '🖱️ عند الضغط على [ELEMENT]',
+            isEdgeActivated: false,
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' }
+            }
+          },
+          {
+            opcode: 'onHover',
+            blockType: Scratch.BlockType.HAT,
+            text: '👆 عند التمرير فوق [ELEMENT]',
+            isEdgeActivated: false,
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' }
+            }
+          },
+          {
+            opcode: 'setClickable',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '🖱️ اجعل [ELEMENT] [STATE]',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' },
+              STATE: { type: Scratch.ArgumentType.STRING, menu: 'clickableMenu' }
+            }
+          },
+          
+          '---',
+          
+          // التأثيرات والحركة
+          {
+            opcode: 'addAnimation',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '✨ أضف تأثير [ANIMATION] لـ [ELEMENT] لمدة [DURATION] ثانية',
+            arguments: {
+              ANIMATION: { type: Scratch.ArgumentType.STRING, menu: 'animationMenu' },
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' },
+              DURATION: { type: Scratch.ArgumentType.NUMBER, defaultValue: 1 }
+            }
+          },
+          {
+            opcode: 'setTransition',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '⚡ عيّن مدة التحول لـ [ELEMENT] إلى [DURATION] ثانية',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' },
+              DURATION: { type: Scratch.ArgumentType.NUMBER, defaultValue: 0.3 }
+            }
+          },
+          
+          '---',
+          
+          // الإظهار والإخفاء
+          {
+            opcode: 'showElement',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '👁️ أظهر [ELEMENT]',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' }
+            }
+          },
+          {
+            opcode: 'hideElement',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '🙈 أخفِ [ELEMENT]',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' }
+            }
+          },
+          {
+            opcode: 'toggleElement',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '🔄 بدّل إظهار/إخفاء [ELEMENT]',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' }
+            }
+          },
+          
+          '---',
+          
+          // الحصول على القيم
+          {
+            opcode: 'getValue',
+            blockType: Scratch.BlockType.REPORTER,
+            text: '📤 قيمة [ELEMENT]',
+            arguments: { 
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' } 
+            }
+          },
+          {
+            opcode: 'getPosition',
+            blockType: Scratch.BlockType.REPORTER,
+            text: '📍 [AXIS] لـ [ELEMENT]',
+            arguments: { 
+              AXIS: { type: Scratch.ArgumentType.STRING, menu: 'axisMenu' },
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' } 
+            }
+          },
+          {
+            opcode: 'isVisible',
+            blockType: Scratch.BlockType.BOOLEAN,
+            text: '👁️ هل [ELEMENT] ظاهر؟',
+            arguments: { 
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' } 
+            }
+          },
+          {
+            opcode: 'elementExists',
+            blockType: Scratch.BlockType.BOOLEAN,
+            text: '✅ هل يوجد عنصر [ELEMENT]؟',
+            arguments: { 
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' } 
+            }
+          },
+          
+          '---',
+          
+          // الحذف والتنظيف
+          {
+            opcode: 'removeElement',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '🗑️ احذف [ELEMENT]',
+            arguments: {
+              ELEMENT: { type: Scratch.ArgumentType.STRING, menu: 'dynamicElements' }
+            }
+          },
+          {
+            opcode: 'clearAll',
+            blockType: Scratch.BlockType.COMMAND,
+            text: '🧹 إزالة كل العناصر'
+          },
+          
+          '---',
+          
+          // إحصائيات
+          {
+            opcode: 'countElements',
+            blockType: Scratch.BlockType.REPORTER,
+            text: '🔢 عدد العناصر الحالية'
+          }
+        ],
+        menus: {
+          elementMenu: {
+            acceptReporters: false,
+            items: [
+              { text: 'زر (button)', value: 'button' },
+              { text: 'خانة إدخال (input)', value: 'input' },
+              { text: 'نص (p)', value: 'p' },
+              { text: 'مربع نص (div)', value: 'div' },
+              { text: 'صورة (img)', value: 'img' },
+              { text: 'عنوان (h1)', value: 'h1' },
+              { text: 'مربع اختيار (checkbox)', value: 'checkbox' },
+              { text: 'مربع نص طويل (textarea)', value: 'textarea' }
+            ]
+          },
+          dynamicElements: {
+            acceptReporters: false,
+            items: 'getElementsMenu'
+          },
+          styleMenu: {
+            acceptReporters: false,
+            items: [
+              { text: 'لون الخلفية (background)', value: 'background' },
+              { text: 'لون النص (color)', value: 'color' },
+              { text: 'حجم الخط (fontSize)', value: 'fontSize' },
+              { text: 'نوع الخط (fontFamily)', value: 'fontFamily' },
+              { text: 'الحدود (border)', value: 'border' },
+              { text: 'استدارة الزوايا (borderRadius)', value: 'borderRadius' },
+              { text: 'الظل (boxShadow)', value: 'boxShadow' }
+            ]
+          },
+          animationMenu: {
+            acceptReporters: false,
+            items: [
+              { text: 'اهتزاز (shake)', value: 'shake' },
+              { text: 'تلاشي (fadeIn)', value: 'fadeIn' },
+              { text: 'انزلاق (slideIn)', value: 'slideIn' },
+              { text: 'تكبير (zoomIn)', value: 'zoomIn' },
+              { text: 'ارتداد (bounce)', value: 'bounce' },
+              { text: 'دوران (rotate)', value: 'rotate' }
+            ]
+          },
+          clickableMenu: {
+            acceptReporters: false,
+            items: [
+              { text: 'قابل للضغط', value: 'enabled' },
+              { text: 'غير قابل للضغط', value: 'disabled' }
+            ]
+          },
+          axisMenu: {
+            acceptReporters: false,
+            items: [
+              { text: 'X', value: 'x' },
+              { text: 'Y', value: 'y' }
+            ]
+          }
+        }
+      };
+    },
+
+    getElementsMenu() {
+      const items = updateElementMenu();
+      return items.length ? items : [{ text: 'لا يوجد عناصر', value: 'none' }];
+    },
+
+    addElement(args) {
+      this.addElementWithId({ TYPE: args.TYPE, TEXT: args.TEXT, ID: '' });
+    },
+
+    addElementWithId(args) {
+      let el;
+      if (args.TYPE === 'checkbox') {
+        el = document.createElement('input');
+        el.type = 'checkbox';
+      } else if (args.TYPE === 'textarea') {
+        el = document.createElement('textarea');
+        el.value = args.TEXT;
+      } else {
+        el = document.createElement(args.TYPE);
+        if (args.TYPE === 'input') el.value = args.TEXT;
+        else if (args.TYPE === 'img') el.src = args.TEXT;
+        else el.innerText = args.TEXT;
+      }
+
+      el.dataset.label = args.ID || args.TYPE;
+      if (args.ID) el.id = args.ID;
+
+      el.style.position = 'absolute';
+      el.style.left = Math.random() * 200 + 'px';
+      el.style.top = Math.random() * 200 + 'px';
+      el.style.zIndex = globalZIndex++;
+      el.style.padding = '8px 12px';
+      el.style.background = args.TYPE === 'button' ? '#10b981' : 'transparent';
+      el.style.color = args.TYPE === 'button' ? 'white' : 'black';
+      el.style.border = ['input', 'textarea'].includes(args.TYPE) ? '1px solid #ccc' : 'none';
+      el.style.borderRadius = '6px';
+      el.style.cursor = 'pointer';
+      el.style.fontFamily = 'Tahoma';
+      el.style.transition = 'all 0.3s ease';
+
+      const stage = getStage();
+      stage.appendChild(el);
+      htmlElements.push(el);
+
+      // التأكد من بقاء العنصر داخل الحدود
+      setTimeout(() => keepInBounds(el), 0);
+
+      const index = htmlElements.length;
+      
+      // إعداد الأحداث
+      el.addEventListener('click', () => {
+        if (eventCallbacks[`click_${index}`]) {
+          eventCallbacks[`click_${index}`].forEach(cb => cb());
+        }
+      });
+      
+      el.addEventListener('mouseenter', () => {
+        if (eventCallbacks[`hover_${index}`]) {
+          eventCallbacks[`hover_${index}`].forEach(cb => cb());
+        }
+      });
+    },
+
+    moveElement(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+
+      const stage = getStage();
+      const stageRect = stage.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      
+      const maxX = stageRect.width - elRect.width;
+      const maxY = stageRect.height - elRect.height;
+      const x = Math.max(0, Math.min(args.X, maxX));
+      const y = Math.max(0, Math.min(args.Y, maxY));
+
+      el.style.left = x + 'px';
+      el.style.top = y + 'px';
+    },
+
+    setSize(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+      el.style.width = args.WIDTH + 'px';
+      el.style.height = args.HEIGHT + 'px';
+      // التأكد من بقاء العنصر داخل الحدود بعد تغيير الحجم
+      setTimeout(() => keepInBounds(el), 0);
+    },
+
+    setRotation(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+      el.style.transform = `rotate(${args.ANGLE}deg)`;
+    },
+
+    setStyle(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+      el.style[args.STYLE] = args.VALUE;
+    },
+
+    setOpacity(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+      el.style.opacity = args.OPACITY / 100;
+    },
+
+    setZIndex(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+      el.style.zIndex = args.Z;
+    },
+
+    changeText(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+      if (el.tagName === 'INPUT') el.value = args.TEXT;
+      else if (el.tagName === 'TEXTAREA') el.value = args.TEXT;
+      else if (el.tagName === 'IMG') el.src = args.TEXT;
+      else el.innerText = args.TEXT;
+    },
+
+    appendText(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+        el.value += args.TEXT;
+      } else {
+        el.innerText += args.TEXT;
+      }
+    },
+
+    whenClicked(args) {
+      if (args.ELEMENT === 'none') return;
+      const index = Number(args.ELEMENT);
+      return new Promise(resolve => {
+        const key = `click_${index}`;
+        if (!eventCallbacks[key]) eventCallbacks[key] = [];
+        eventCallbacks[key].push(() => resolve());
+      });
+    },
+
+    whenHovered(args) {
+      if (args.ELEMENT === 'none') return;
+      const index = Number(args.ELEMENT);
+      return new Promise(resolve => {
+        const key = `hover_${index}`;
+        if (!eventCallbacks[key]) eventCallbacks[key] = [];
+        eventCallbacks[key].push(() => resolve());
+      });
+    },
+
+    setClickable(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+      if (args.STATE === 'enabled') {
+        el.style.pointerEvents = 'auto';
+        el.style.opacity = '1';
+      } else {
+        el.style.pointerEvents = 'none';
+        el.style.opacity = '0.5';
+      }
+    },
+
+    addAnimation(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+
+      const animations = {
+        shake: 'shake 0.5s',
+        fadeIn: 'fadeIn 1s',
+        slideIn: 'slideIn 1s',
+        zoomIn: 'zoomIn 1s',
+        bounce: 'bounce 1s',
+        rotate: 'rotate 1s'
+      };
+
+      const keyframes = {
+        shake: '@keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-10px); } 75% { transform: translateX(10px); } }',
+        fadeIn: '@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }',
+        slideIn: '@keyframes slideIn { from { transform: translateY(-50px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }',
+        zoomIn: '@keyframes zoomIn { from { transform: scale(0); } to { transform: scale(1); } }',
+        bounce: '@keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-20px); } }',
+        rotate: '@keyframes rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }'
+      };
+
+      if (!document.getElementById('html-animations')) {
+        const style = document.createElement('style');
+        style.id = 'html-animations';
+        style.innerHTML = Object.values(keyframes).join(' ');
+        document.head.appendChild(style);
+      }
+
+      el.style.animation = animations[args.ANIMATION].replace('1s', args.DURATION + 's');
+      setTimeout(() => { el.style.animation = ''; }, args.DURATION * 1000);
+    },
+
+    setTransition(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+      el.style.transition = `all ${args.DURATION}s ease`;
+    },
+
+    showElement(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+      el.style.display = 'block';
+    },
+
+    hideElement(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+      el.style.display = 'none';
+    },
+
+    toggleElement(args) {
+      if (args.ELEMENT === 'none') return;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return;
+      el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    },
+
+    getValue(args) {
+      if (args.ELEMENT === 'none') return '';
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return '';
+      if (el.tagName === 'INPUT') {
+        return el.type === 'checkbox' ? el.checked : el.value;
+      }
+      if (el.tagName === 'TEXTAREA') return el.value;
+      return el.innerText;
+    },
+
+    getPosition(args) {
+      if (args.ELEMENT === 'none') return 0;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return 0;
+      return args.AXIS === 'x' ? parseInt(el.style.left) : parseInt(el.style.top);
+    },
+
+    isVisible(args) {
+      if (args.ELEMENT === 'none') return false;
+      const el = this.getElement(args.ELEMENT);
+      if (!el) return false;
+      return el.style.display !== 'none';
+    },
+
+    elementExists(args) {
+      if (args.ELEMENT === 'none') return false;
+      return !!this.getElement(args.ELEMENT);
+    },
+
+    removeElement(args) {
+      if (args.ELEMENT === 'none') return;
+      const index = Number(args.ELEMENT) - 1;
+      const el = htmlElements[index];
+      if (!el) return;
+      el.remove();
+      htmlElements[index] = null;
+    },
+
+    clearAll() {
+      htmlElements.forEach(e => e && e.remove());
+      htmlElements.length = 0;
+      Object.keys(eventCallbacks).forEach(k => delete eventCallbacks[k]);
+    },
+
+    countElements() {
+      return htmlElements.filter(el => el !== null).length;
+    },
+
+    getElement(elementId) {
+      const index = Number(elementId) - 1;
+      return htmlElements[index];
+    }
+  };
+
+  Scratch.extensions.register(ext);
+})(Scratch);
